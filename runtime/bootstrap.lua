@@ -210,15 +210,14 @@ local function _sleepMs(ms)
 end
 
 
-local _startTimer = GetGameTimer()
-local _maxRuntime = tonumber(os.getenv("CFXLUA_TIMEOUT")) or 5000
+local _startTime = os.time()
+local _maxRuntimeSec = (tonumber(os.getenv("CFXLUA_TIMEOUT")) or 5000) / 1000
 
 while true do
     local nextWake = ScheduleResourceTick()
 
-    -- Execution timeout for standalone verification
-    if (GetGameTimer() - _startTimer) > _maxRuntime then
-        -- io.stderr:write("[cfxlua] Verification timeout reached (" .. _maxRuntime .. "ms). Exiting scheduler.\n")
+    -- Execution timeout for standalone verification (using wall-clock time)
+    if (os.time() - _startTime) > _maxRuntimeSec then
         break
     end
 

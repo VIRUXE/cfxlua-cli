@@ -1,0 +1,1 @@
+print('lib type:', type(lib)); print('lib.checkDependency type:', type(lib.checkDependency)); print('result of call:', type(lib.checkDependency())); if lib.checkDependency() then print('result is truthy') end

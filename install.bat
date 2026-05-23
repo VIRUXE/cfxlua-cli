@@ -37,7 +37,7 @@ echo Adding to PATH...
 setx PATH "%PATH%;%INSTALL_DIR%\bin"
 
 echo -----------------------------------------------------------------------
-echo Success! CfxLua CLI v1.1.0 installed.
+echo Success! CfxLua CLI v1.1.1 installed.
 echo NOTE: You may need to restart your terminal for PATH changes to take effect.
 echo Usage: cfxlua ^<script.lua^>
 echo -----------------------------------------------------------------------

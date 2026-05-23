@@ -457,20 +457,9 @@ function SetConvarServerInfo(name, value)
     SetConvar(name, value)
 end
 
-function GetConvar(name, default)
-    local key = tostring(name)
-    local v = _convars[key]
-    if v ~= nil then return v end
-    return os.getenv(key) or default
-end
+-- (using citizen.lua implementation)
 
-function GetConvarInt(name, default)
-    local v = GetConvar(name, nil)
-    if v == nil then return default end
-    local n = tonumber(v)
-    if not n then return default end
-    return math.floor(n)
-end
+-- (using citizen.lua implementation)
 
 -- ---------------------------------------------------------------------------
 -- State bags + handlers

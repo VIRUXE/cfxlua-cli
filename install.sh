@@ -41,6 +41,6 @@ sudo ln -sf "$INSTALL_DIR/bin/cfxlua" "$BIN_LINK"
 sudo chmod +x "$BIN_LINK"
 
 echo "-----------------------------------------------------------------------"
-echo "Success! CfxLua CLI v1.1.0 installed."
+echo "Success! CfxLua CLI v1.1.1 installed."
 echo "Usage: cfxlua <script.lua>"
 echo "-----------------------------------------------------------------------"

@@ -64,12 +64,12 @@ if not exist "%BOOTSTRAP%" (
 :: Handle special flags
 :: ---------------------------------------------------------------------------
 if "%~1"=="--version" (
-    echo CfxLua 1.1.0  -  (c) 2026 Polaris Naz
+    echo CfxLua 1.1.1  -  (c) 2026 Polaris Naz
     echo LuaGLM 5.4  -  Cfx.re
     exit /b 0
 )
 if "%~1"=="-v" (
-    echo CfxLua 1.1.0  -  (c) 2026 Polaris Naz
+    echo CfxLua 1.1.1  -  (c) 2026 Polaris Naz
     echo LuaGLM 5.4  -  Cfx.re
     exit /b 0
 )

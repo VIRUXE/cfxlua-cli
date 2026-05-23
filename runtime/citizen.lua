@@ -1,27 +1,16 @@
 -- =============================================================================
 -- citizen.lua  —  CfxLua Standalone Runtime
 -- =============================================================================
--- SHIM: FXServer exposes the Citizen table via LuaScriptRuntime.cpp's
--- lua_cfx_* C functions, each registered via lua_register(). Here we build
--- an equivalent Lua-native table. Scheduler functions (Wait, CreateThread,
--- SetTimeout, Await) are populated by scheduler.lua which must be loaded
--- first; this file augments Citizen with the remaining surface area.
--- =============================================================================
-
 Citizen = Citizen or {}
+
 -- ---------------------------------------------------------------------------
--- Magic Mock system for undefined globals and exports
+-- Magic Mock system
 -- ---------------------------------------------------------------------------
 local function createMagicMock(name)
     local mock = {}
     local mt = {
-        __index = function(self, key)
-            return self
-        end,
-        __call = function(self, ...)
-            -- Returning self ensures the result is truthy and allows chaining
-            return self
-        end,
+        __index = function(self, key) return self end,
+        __call = function(self, ...) return self end,
         __tostring = function() return "" end,
         __concat = function(a, b) return tostring(a) .. tostring(b) end,
         __len = function() return 0 end,
@@ -29,491 +18,236 @@ local function createMagicMock(name)
     return setmetatable(mock, mt)
 end
 
--- Setup global proxy to catch undefined globals like "lib" or client natives
 setmetatable(_G, {
-    __index = function(_, key)
-        -- Standard Lua/Citizen globals are already in _G. 
-        -- Unknowns get a callable/indexable mock.
-        return createMagicMock(key)
-    end
+    __index = function(_, key) return createMagicMock(key) end
 })
 
--- ---------------------------------------------------------------------------
--- Global require wrapper for FiveM module resolution
--- ---------------------------------------------------------------------------
 local _originalRequire = require
 function require(moduleName)
     local ok, result = pcall(_originalRequire, moduleName)
     if ok then return result end
-
-    -- If the module is not found, return a MagicMock rather than erroring out
-    -- to allow standalone verification to continue.
     return createMagicMock(moduleName)
 end
 
+-- ---------------------------------------------------------------------------
+-- Resource identity & Path discovery
+-- ---------------------------------------------------------------------------
+local function _basename(path) return (path or ""):match("[^/\\\\]+$") or "standalone" end
+local _scriptPath = arg and arg[1]
+local _resourceName = os.getenv("CFXLUA_RESOURCE_NAME") or _basename(_scriptPath or "standalone")
 
--- ---------------------------------------------------------------------------
--- Resource identity
--- SHIM: FXServer sets GetCurrentResourceName from the resource manifest and
--- GetInvokingResource from the call stack of native invocations.
--- We derive them from arg[0] (script path stripped to basename).
--- ---------------------------------------------------------------------------
-local function _basename(path)
-    return (path or ""):match("[^/\\]+$") or "standalone"
+function GetCurrentResourceName() return _resourceName end
+function GetInvokingResource() return nil end
+function GetResourceState(name) return "started" end
+
+local _projectRoot = "."
+if _scriptPath then
+    local current = _scriptPath
+    for i = 1, 15 do
+        local parent = current:match("(.*)[/\\/]")
+        if not parent then break end
+        local f = io.open(parent .. "/server.cfg", "r")
+        if f then
+            f:close()
+            _projectRoot = parent
+            break
+        end
+        current = parent
+    end
 end
 
--- SHIM: arg[0] in the standalone runner is the bootstrap.lua path, but we
--- re-set CFXLUA_RESOURCE_NAME in bootstrap.lua after parsing argv, so we
--- check that env var first for a cleaner resource name.
-local _resourceName = os.getenv("CFXLUA_RESOURCE_NAME")
-    or _basename(arg and arg[0] or "standalone")
-
-function GetCurrentResourceName()
-    return _resourceName
-end
-
--- SHIM: GetInvokingResource() in FXServer returns the resource that triggered
--- the currently-executing event handler. Without a real call-stack tracker we
--- return nil, which is what non-event contexts return anyway.
-function GetInvokingResource()
-    return nil
-end
-
 -- ---------------------------------------------------------------------------
--- Citizen.InvokeNative / Citizen.InvokeNativeByHash
--- SHIM: Real FXServer routes these through NativeHandler → game engine or
--- scripting runtime. We log and return nil so resources that gate on the
--- return value work correctly.
+-- Native Invoke shims
 -- ---------------------------------------------------------------------------
-function Citizen.InvokeNative(hash, ...)
-    -- hash can be a string (0xABCD...) or integer
-    print(string.format(
-        "[cfxlua][STUB] InvokeNative(0x%s) — not implemented in standalone",
-        type(hash) == "number" and string.format("%X", hash) or tostring(hash)
-    ))
-    return nil
-end
-
+function Citizen.InvokeNative(hash, ...) return nil end
 Citizen.InvokeNativeByHash = Citizen.InvokeNative
-
--- ---------------------------------------------------------------------------
--- Citizen.Trace / print shims
--- SHIM: Citizen.Trace writes to the FXServer structured log. We forward to
--- print with an optional prefix.
--- ---------------------------------------------------------------------------
-function Citizen.Trace(msg)
-    io.write((function(s)
-        s = tostring(s)
-        local ansi = {
-            ["0"] = "\27[0m",   -- reset/default
-            ["1"] = "\27[31m",  -- red
-            ["2"] = "\27[32m",  -- green
-            ["3"] = "\27[33m",  -- yellow
-            ["4"] = "\27[34m",  -- blue
-            ["5"] = "\27[36m",  -- cyan
-            ["6"] = "\27[35m",  -- magenta
-            ["7"] = "\27[37m",  -- white
-            ["8"] = "\27[90m",  -- bright black / gray
-            ["9"] = "\27[91m",  -- bright red
-        }
-        return (s:gsub("%^(%d)", function(d) return ansi[d] or "" end))
-    end)(msg))
-    io.flush()
-end
-
--- SHIM: FXServer's print is overridden to write to the resource log stream.
--- We leave the standard print in place and alias it.
+function Citizen.Trace(msg) io.write(tostring(msg):gsub("%%^(%%d)", "")) io.flush() end
 Citizen.Log = print
-
--- ---------------------------------------------------------------------------
--- Citizen.GetTickCount
--- SHIM: Returns milliseconds since resource start. Identical to GetGameTimer.
--- ---------------------------------------------------------------------------
-function Citizen.GetTickCount()
-    return GetGameTimer()
-end
-
--- ---------------------------------------------------------------------------
--- Citizen.SubmitBoundaryStart / SubmitBoundaryEnd
--- SHIM: FXServer uses these for structured profiling. No-op here.
--- ---------------------------------------------------------------------------
+function Citizen.GetTickCount() return GetGameTimer() end
 function Citizen.SubmitBoundaryStart(a, b) end
-function Citizen.SubmitBoundaryEnd(a, b)   end
+function Citizen.SubmitBoundaryEnd(a, b) end
+function Citizen.RegisterResourceAsEventHandler(name) end
+function Citizen.TriggerEventInternal(name, data, len) end
 
 -- ---------------------------------------------------------------------------
--- Citizen.RegisterResourceAsEventHandler / TriggerEventInternal
--- SHIM: Used internally by AddEventHandler to register interest on the C++
--- side. Stubbed to no-ops so scripts that call them directly don't error.
+-- Config Discovery System
 -- ---------------------------------------------------------------------------
-function Citizen.RegisterResourceAsEventHandler(name) end
-function Citizen.TriggerEventInternal(name, data, len)
-    -- SHIM: In FXServer this calls the C native to deserialise msgpack and
-    -- dispatch the event. We parse data as a raw string and call TriggerEvent.
-    -- In practice standalone scripts won't hit this path.
+local _convarRegistry = {
+    ["onesync_enableInfinity"] = "1",
+    ["gamename"] = "fivem",
+    ["inventory:framework"] = "qbx"
+}
+
+local function _parseCfg(filePath)
+    local f = io.open(filePath, "r")
+    if not f then return end
+    local dir = filePath:match("(.*[\\/])") or ""
+    for line in f:lines() do
+        local key, value = line:match("^%%s*set[rs]?%%s+([^%%s]+)%%s+(.-)%%s*$")
+        if key and value then
+            value = value:gsub("%%s*#.*$", ""):match("^%%s*(.-)%%s*$") or value
+            if (value:sub(1,1) == '"' and value:sub(-1) == '"') or (value:sub(1,1) == "'" and value:sub(-1) == "'") then
+                value = value:sub(2, -2)
+            end
+            _convarRegistry[key] = value
+        end
+        local execFile = line:match("^%%s*exec%%s+[\"']?(.-)['\"]?%%s*$")
+        if execFile then _parseCfg(dir .. execFile) end
+    end
+    f:close()
 end
+
+if _projectRoot ~= "." then
+    _parseCfg(_projectRoot .. "/server.cfg")
+end
+
+function GetConvar(name, default)
+    local key = tostring(name)
+    return _convarRegistry[key] or os.getenv(key) or default
+end
+
+function GetConvarInt(name, default)
+    local v = GetConvar(name, nil)
+    return v and tonumber(v) or default
+end
+function SetConvar(name, value) end
 
 -- ---------------------------------------------------------------------------
 -- exports proxy
--- SHIM: FXServer's exports table is a C userdata with __index that performs
--- a cross-resource native call. Here we use a two-level Lua proxy table.
--- Writing: exports["myResource"] = { myFunc = fn }
--- Reading: exports["myResource"].myFunc(...)
---
--- Resources that want to expose exports call:
---   exports("myResource", { fn1 = ..., fn2 = ... })
--- OR assign to exports directly.
 -- ---------------------------------------------------------------------------
-local _exportRegistry = {}   -- { [resourceName] = { [fnName] = fn } }
+local _exportRegistry = {}
+local _resourcePathCache = {}
 
--- Helper to find a resource folder in the filesystem
 local function _findResourcePath(name)
-    local cwd = os.getenv("PWD") or "."
-    -- Try to find "resources" folder by walking up
-    local current = cwd
-    local resourcesRoot = nil
-    for i = 1, 5 do
-        local f = io.open(current .. "/resources", "r")
-        if f then
-            f:close()
-            resourcesRoot = current .. "/resources"
-            break
+    if _resourcePathCache[name] then return _resourcePathCache[name] end
+    local searchRoots = { _projectRoot .. "/resources" }
+    for _, root in ipairs(searchRoots) do
+        local cmd = string.format("find %%q -maxdepth 4 -type d -name %%q 2>/dev/null", root, name)
+        local handle = io.popen(cmd)
+        if handle then
+            local path = handle:read("*l")
+            handle:close()
+            if path and path ~= "" then 
+                _resourcePathCache[name] = path
+                return path 
+            end
         end
-        current = current .. "/.."
-    end
-    
-    if not resourcesRoot then return nil end
-    
-    -- Search for the resource folder (including subfolders like [ox])
-    -- We use find command via os.execute/io.popen for efficiency
-    local cmd = string.format("find %q -maxdepth 3 -type d -name %q 2>/dev/null", resourcesRoot, name)
-    local handle = io.popen(cmd)
-    if handle then
-        local path = handle:read("*l")
-        handle:close()
-        return path
     end
     return nil
 end
 
--- Helper to scan fxmanifest.lua for export definitions
 local function _scanExports(resourceName)
     local path = _findResourcePath(resourceName)
     if not path then return nil end
-    
     local manifestPath = path .. "/fxmanifest.lua"
     local f = io.open(manifestPath, "r")
     if not f then return nil end
     local content = f:read("*a")
     f:close()
-    
     local exports = {}
-    -- Basic regex-like match for export 'name' or exports { 'name1', 'name2' }
-    for name in content:gmatch("export%s+['\"']([^'\"]+)['\"']") do
-        exports[name] = function() return nil end
-    end
-    for names in content:gmatch("exports%s*{(.-)}") do
-        for name in names:gmatch("['\"']([^'\"]+)['\"']") do
-            exports[name] = function() return nil end
-        end
+    for name in content:gmatch("export%%s+[\\\"']([^\\'\\\"]+)[\\'\\\"]") do exports[name] = function() return nil end end
+    for names in content:gmatch("exports%%s*{(.-)}") do
+        for name in names:gmatch("[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]") do exports[name] = function() return nil end end
     end
     return exports
 end
 
 exports = setmetatable({}, {
     __index = function(self, resourceName)
-        -- If we are indexing ourselves, return our own registry
         if resourceName == GetCurrentResourceName() then
             if not _exportRegistry[resourceName] then _exportRegistry[resourceName] = {} end
             return _exportRegistry[resourceName]
         end
-
         local reg = _exportRegistry[resourceName]
+        if not reg then reg = _scanExports(resourceName); if reg then _exportRegistry[resourceName] = reg end end
         if not reg then
-            -- Try lazy discovery
-            reg = _scanExports(resourceName)
-            if reg then
-                _exportRegistry[resourceName] = reg
-            end
-        end
-
-        if not reg then
-            -- Return a silent dummy proxy
             return setmetatable({}, {
-                __index = function(_, fnName)
-                    return function() return nil end
-                end,
+                __index = function(_, fnName) return function() return nil end end,
                 __newindex = function(_, fnName, fn)
                     if not _exportRegistry[resourceName] then _exportRegistry[resourceName] = {} end
                     _exportRegistry[resourceName][fnName] = fn
                 end
             })
         end
-
         return setmetatable({}, {
             __index = function(_, fnName)
-                local fn = reg[fnName]
-                if not fn then return function() return nil end end
-                return fn
+                local fn = reg[fnName]; if not fn then return function() return nil end end; return fn
             end
         })
     end,
-
     __newindex = function(self, key, value)
         local resourceName = GetCurrentResourceName()
         if not _exportRegistry[resourceName] then _exportRegistry[resourceName] = {} end
-        if type(value) == "function" then
-            _exportRegistry[resourceName][key] = value
-        elseif type(value) == "table" then
-            _exportRegistry[key] = value
-        end
+        if type(value) == "function" then _exportRegistry[resourceName][key] = value
+        elseif type(value) == "table" then _exportRegistry[key] = value end
     end,
-
     __call = function(_, name, fn)
         local resourceName = GetCurrentResourceName()
         if not _exportRegistry[resourceName] then _exportRegistry[resourceName] = {} end
-        if type(name) == "table" then
-            for k, v in pairs(name) do _exportRegistry[resourceName][k] = v end
-        else
-            _exportRegistry[resourceName][name] = fn
-        end
+        if type(name) == "table" then for k, v in pairs(name) do _exportRegistry[resourceName][k] = v end
+        else _exportRegistry[resourceName][name] = fn end
     end
 })
--- Helper for tests / introspection
-function __cfx_getExportRegistry()
-    return _exportRegistry
-end
 
 -- ---------------------------------------------------------------------------
 -- StateBags
--- SHIM: FXServer's statebags are networked key/value stores backed by the
--- state-bag replication system (C++). Each entity (player, vehicle, global)
--- has its own bag. Here we use nested Lua tables with __index/__newindex
--- metamethods. Changes are NOT replicated (single-process).
---
--- API surface:
---   GlobalState.key = value          — write global state
---   GlobalState.key                  — read global state
---   Player(id).state.key = value     — write player state
---   Entity(ent).state.key = value    — write entity state
 -- ---------------------------------------------------------------------------
-local _bagStore = {}  -- { [bagId] = { [key] = value } }
-
+local _bagStore = {}
 local function _makeBag(bagId)
     if not _bagStore[bagId] then _bagStore[bagId] = {} end
-    return setmetatable({}, {
-        __index = function(_, key)
-            return _bagStore[bagId][key]
-        end,
-        __newindex = function(_, key, value)
-            -- SHIM: Real FXServer serialises to msgpack and broadcasts to
-            -- all subscribed clients/server. Here we write to local table.
-            _bagStore[bagId][key] = value
-        end,
-        __tostring = function(_)
-            return string.format("StateBag(%s)", bagId)
-        end
+    local bag = {
+        set = function(self, key, value, replicated) _bagStore[bagId][key] = value end,
+        get = function(self, key) return _bagStore[bagId][key] end
+    }
+    return setmetatable(bag, {
+        __index = function(t, key) if key == "set" or key == "get" then return bag[key] end return _bagStore[bagId][key] end,
+        __newindex = function(_, key, value) _bagStore[bagId][key] = value end,
+        __tostring = function(_) return string.format("StateBag(%%s)", bagId) end
     })
 end
 
--- Global state bag (accessible as GlobalState.x)
 GlobalState = _makeBag("__global__")
-
--- Player state: Player(netId).state
--- SHIM: FXServer's Player() returns a playerHandle userdata.
--- We return a table with a .state field.
 local _playerHandles = {}
 function Player(netId)
-    if not _playerHandles[netId] then
-        _playerHandles[netId] = {
-            state = _makeBag("player:" .. tostring(netId))
-        }
-    end
+    if not _playerHandles[netId] then _playerHandles[netId] = { state = _makeBag("player:" .. tostring(netId)) } end
     return _playerHandles[netId]
 end
-
--- Entity state: Entity(entityId).state
 local _entityHandles = {}
 function Entity(entityId)
-    if not _entityHandles[entityId] then
-        _entityHandles[entityId] = {
-            state = _makeBag("entity:" .. tostring(entityId))
-        }
-    end
+    if not _entityHandles[entityId] then _entityHandles[entityId] = { state = _makeBag("entity:" .. tostring(entityId)) } end
     return _entityHandles[entityId]
 end
 
 -- ---------------------------------------------------------------------------
--- KVP (Key-Value Persistence)
--- SHIM: FXServer stores KVP in a SQLite database per-resource (kvs.db).
--- Here we use an in-memory table. Data does NOT persist across runs.
+-- KVP
 -- ---------------------------------------------------------------------------
 local _kvp = {}
-
-function GetResourceKvpString(key)
-    local v = _kvp[key]
-    return (type(v) == "string") and v or nil
-end
-
-function GetResourceKvpInt(key)
-    local v = _kvp[key]
-    return (type(v) == "number") and math.floor(v) or nil
-end
-
-function GetResourceKvpFloat(key)
-    local v = _kvp[key]
-    return (type(v) == "number") and v or nil
-end
-
-function SetResourceKvp(key, value)
-    assert(type(key) == "string", "SetResourceKvp: key must be string")
-    _kvp[key] = value
-end
-
-SetResourceKvpInt   = SetResourceKvp
-SetResourceKvpFloat = SetResourceKvp
-
-function DeleteResourceKvp(key)
-    _kvp[key] = nil
-end
-
--- KVP enumerator (returns an iterator)
+function GetResourceKvpString(key) local v = _kvp[key]; return (type(v) == "string") and v or nil end
+function GetResourceKvpInt(key) local v = _kvp[key]; return (type(v) == "number") and math.floor(v) or nil end
+function GetResourceKvpFloat(key) local v = _kvp[key]; return (type(v) == "number") and v or nil end
+function SetResourceKvp(key, value) _kvp[key] = value end
+SetResourceKvpInt = SetResourceKvp; SetResourceKvpFloat = SetResourceKvp
+function DeleteResourceKvp(key) _kvp[key] = nil end
 function StartFindKvp(prefix)
-    local keys = {}
-    for k in pairs(_kvp) do
-        if k:sub(1, #prefix) == prefix then
-            keys[#keys + 1] = k
-        end
-    end
-    table.sort(keys)
-    local i = 0
-    return function()
-        i = i + 1
-        return keys[i]
-    end
+    local keys = {}; for k in pairs(_kvp) do if k:sub(1, #prefix) == prefix then table.insert(keys, k) end end
+    table.sort(keys); local i = 0; return function() i = i + 1; return keys[i] end
 end
 
 -- ---------------------------------------------------------------------------
--- Convar access
--- SHIM: FXServer convars are server config variables (server.cfg).
--- We read from environment variables as a reasonable standalone equivalent.
+-- HTTP
 -- ---------------------------------------------------------------------------
-function GetConvar(name, default)
-    return os.getenv(name) or default
-end
-
-function GetConvarInt(name, default)
-    local v = os.getenv(name)
-    return v and tonumber(v) or default
-end
-
--- SetConvar is server-only; stub for compatibility
-function SetConvar(name, value)
-    -- SHIM: In FXServer this broadcasts to clients. No-op here.
-end
-
--- ---------------------------------------------------------------------------
--- PerformHttpRequest
--- SHIM: Frontend compatibility wrapper that prefers backend runtime natives:
---   PerformHttpRequestInternalEx / PerformHttpRequestInternal.
--- This keeps the public API 1:1 while backend transport is runtime-provided.
--- ---------------------------------------------------------------------------
-local _httpDispatch = {}
-local _httpDispatchInstalled = false
-
-local function _ensureHttpDispatch()
-    if _httpDispatchInstalled then return end
-    _httpDispatchInstalled = true
-
-    AddEventHandler("__cfx_internal:httpResponse", function(token, status, body, headers, errorData)
-        local cb = _httpDispatch[token]
-        if cb then
-            _httpDispatch[token] = nil
-            cb(status, body, headers or {}, errorData)
-        end
-    end)
-end
-
-function PerformHttpRequest(url, callback, method, data, headers, options)
-    method  = method or "GET"
-    headers = headers or {}
-    options = options or {}
-
-    if type(PerformHttpRequestInternalEx) == "function" then
-        _ensureHttpDispatch()
-
-        local req = {
-            url = url,
-            method = method,
-            data = data or "",
-            headers = headers,
-            followLocation = (options.followLocation ~= false),
-            timeout = options.timeout,
-        }
-
-        local token = PerformHttpRequestInternalEx(req)
-        if token and token ~= -1 then
-            _httpDispatch[token] = callback
-        else
-            callback(0, nil, {}, "Failure handling HTTP request")
-        end
-        return
-    end
-
-    if type(PerformHttpRequestInternal) == "function" then
-        _ensureHttpDispatch()
-        local token = PerformHttpRequestInternal(url, method, data or "", headers)
-        if token and token ~= -1 then
-            _httpDispatch[token] = callback
-        else
-            callback(0, nil, {}, "Failure handling HTTP request")
-        end
-        return
-    end
-
-    callback(0, nil, {}, "standalone: HTTP backend unavailable")
-end
-
-function PerformHttpRequestAwait(url, method, data, headers, options)
-    local p = Promise.new()
-    PerformHttpRequest(url, function(...)
-        p:resolve({ ... })
-    end, method, data, headers, options)
-    local out = Citizen.Await(p)
-    return table.unpack(out)
-end
+function PerformHttpRequest(url, callback, ...) callback(0, nil, {}, "standalone: HTTP unavailable") end
+function PerformHttpRequestAwait(url, ...) return 0, nil, {}, "standalone: HTTP unavailable" end
 
 -- ---------------------------------------------------------------------------
 -- print override
--- SHIM: FXServer prepends the resource name to all print() output.
--- We do the same for consistency.
 -- ---------------------------------------------------------------------------
 local _rawPrint = print
 function print(...)
-    local function _renderFiveMColors(text)
-        local ansi = {
-            ["0"] = "\27[0m",
-            ["1"] = "\27[31m",
-            ["2"] = "\27[32m",
-            ["3"] = "\27[33m",
-            ["4"] = "\27[34m",
-            ["5"] = "\27[36m",
-            ["6"] = "\27[35m",
-            ["7"] = "\27[37m",
-            ["8"] = "\27[90m",
-            ["9"] = "\27[91m",
-        }
-        text = tostring(text):gsub("%^(%d)", function(d)
-            return ansi[d] or ""
-        end)
-        return text
+    local function _render(text)
+        return tostring(text):gsub("%^(%d)", "")
     end
-
-    local parts = {}
-    for i = 1, select("#", ...) do
-        parts[i] = _renderFiveMColors(select(i, ...))
-    end
-    _rawPrint(string.format("[%s] %s\27[0m", GetCurrentResourceName(), table.concat(parts, "\t")))
+    local p = {}; for i = 1, select("#", ...) do p[i] = _render(select(i, ...)) end
+    _rawPrint(("[%s] %s"):format(GetCurrentResourceName(), table.concat(p, "\t")))
 end
-
--- Restore raw print access if needed
 rawprint = _rawPrint
