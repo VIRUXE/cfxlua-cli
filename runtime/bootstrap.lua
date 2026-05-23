@@ -184,65 +184,61 @@ local _isWindows = package.config:sub(1, 1) == "\\"
 
 local function _sleepMs(ms)
     if ms <= 0 then return end
+    local sleepSec = ms / 1000
+    local t0 = GetGameTimer()
 
-    if _isWindows then
-        -- Use PowerShell sleep for millisecond precision on Windows.
-        local cmd = string.format(
-            'powershell -NoProfile -NonInteractive -Command "Start-Sleep -Milliseconds %d"',
-            math.floor(ms)
-        )
-        local ok = os.execute(cmd)
-        if not ok then
-            -- Fallback: busy-wait if PowerShell isn't available.
-            local t0 = GetGameTimer()
-            while (GetGameTimer() - t0) < ms do end
-        end
-        return
+    local ok
+    if package.config:sub(1, 1) == "\\" then
+        local cmd = string.format('powershell -NoProfile -Command "Start-Sleep -Milliseconds %d"', math.floor(ms))
+        ok = os.execute(cmd)
+    else
+        ok = os.execute(string.format("sleep %.4f 2>/dev/null", sleepSec))
     end
 
-    local sleepSec = ms / 1000
-    local ok = os.execute(string.format("sleep %.4f 2>/dev/null", sleepSec))
     if not ok then
-        -- Fallback for minimal environments.
-        local t0 = GetGameTimer()
-        while (GetGameTimer() - t0) < ms do end
+        -- Fallback: busy-wait
+        local start = GetGameTimer()
+        while (GetGameTimer() - start) < ms do end
+    else
+        -- Clock correction: if GetGameTimer didn't advance enough (due to os.execute),
+        -- we manually add the slept time to the scheduler's offset.
+        local t1 = GetGameTimer()
+        local actualDiff = t1 - t0
+        if actualDiff < ms * 0.8 then
+            if __cfx_add_clock_offset then
+                __cfx_add_clock_offset((ms - actualDiff) / 1000)
+            end
+        end
     end
 end
 
 
-local _startTime = os.time()
-local _maxRuntimeSec = (tonumber(os.getenv("CFXLUA_TIMEOUT")) or 5000) / 1000
+local _startTimer = GetGameTimer()
+local _maxRuntime = tonumber(os.getenv("CFXLUA_TIMEOUT")) or 5000
 
 while true do
     local nextWake = ScheduleResourceTick()
 
-    -- Execution timeout for standalone verification (using wall-clock time)
-    if (os.time() - _startTime) > _maxRuntimeSec then
+    -- Execution timeout for standalone verification
+    if (GetGameTimer() - _startTimer) > _maxRuntime then
         break
     end
 
     if not HasPendingThreads() then
-        -- No threads: give a short grace period for SetTimeout(0) callbacks
-        -- that were just registered by the script's top-level code.
         if not idleStart then
-            idleStart = GetGameTimer()
-        elseif GetGameTimer() - idleStart > 100 then
-            -- 100 ms grace with no new threads → done
+            idleStart = now
+        elseif now - idleStart > 100 then
             break
         end
-        -- Tight-loop for 100 ms grace period
     else
-        idleStart = nil   -- reset idle timer when threads exist
+        idleStart = nil
     end
 
     if nextWake then
-        local sleepMs = math.max(TICK_FLOOR_MS, nextWake - GetGameTimer())
+        local sleepMs = math.max(TICK_FLOOR_MS, nextWake - now)
         if sleepMs > 2 then
-            -- SHIM: Real FXServer sleeps in the C++ event loop (libuv).
-            -- Use platform-appropriate sleep without shell-error spam.
             _sleepMs(sleepMs)
         end
-        -- For sub-2ms sleeps: busy-wait (acceptable for test workloads)
     end
 end
 

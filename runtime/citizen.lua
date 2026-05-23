@@ -221,17 +221,37 @@ end
 -- ---------------------------------------------------------------------------
 -- KVP
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- KVP
+-- ---------------------------------------------------------------------------
 local _kvp = {}
+local _kvpFindHandles = {}
+local _nextKvpHandle = 1
+
 function GetResourceKvpString(key) local v = _kvp[key]; return (type(v) == "string") and v or nil end
 function GetResourceKvpInt(key) local v = _kvp[key]; return (type(v) == "number") and math.floor(v) or nil end
 function GetResourceKvpFloat(key) local v = _kvp[key]; return (type(v) == "number") and v or nil end
 function SetResourceKvp(key, value) _kvp[key] = value end
 SetResourceKvpInt = SetResourceKvp; SetResourceKvpFloat = SetResourceKvp
 function DeleteResourceKvp(key) _kvp[key] = nil end
+
 function StartFindKvp(prefix)
     local keys = {}; for k in pairs(_kvp) do if k:sub(1, #prefix) == prefix then table.insert(keys, k) end end
-    table.sort(keys); local i = 0; return function() i = i + 1; return keys[i] end
+    table.sort(keys)
+    local handle = _nextKvpHandle; _nextKvpHandle = _nextKvpHandle + 1
+    _kvpFindHandles[handle] = { keys = keys, index = 1 }
+    return handle
 end
+
+function FindKvp(handle)
+    local h = _kvpFindHandles[handle]
+    if not h then return nil end
+    local key = h.keys[h.index]
+    if key then h.index = h.index + 1 end
+    return key
+end
+
+function EndFindKvp(handle) _kvpFindHandles[handle] = nil end
 
 -- ---------------------------------------------------------------------------
 -- HTTP
