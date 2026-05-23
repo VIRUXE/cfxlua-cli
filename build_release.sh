@@ -13,21 +13,21 @@ WIN_PKG="cfxlua-cli-windows.zip"
 echo "Building CfxLua CLI v$VERSION Release..."
 
 # 1. Clean and Prepare
+make clean
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/linux" "$DIST_DIR/windows/bin" "$DIST_DIR/windows/runtime" "$DIST_DIR/windows"
 
 # 2. Build Linux VM
 echo "Building Linux VM..."
-make clean
 make -j$(nproc)
 cp core/lua "$DIST_DIR/linux/cfxlua-vm"
 
 # 3. Build Windows VM (Cross-compile)
 if command -v x86_64-w64-mingw32-g++ &> /dev/null; then
     echo "Building Windows VM (Cross-compiling)..."
-    make clean
     # Note: Use MinGW g++ for all files because of GLM and LuaGLM extensions
-    make CC="x86_64-w64-mingw32-g++ -std=c++11" CPP="x86_64-w64-mingw32-g++ -std=c++11" PLAT=mingw -j$(nproc)
+    make -C core clean
+    make -C core CC="x86_64-w64-mingw32-g++ -std=c++11" CPP="x86_64-w64-mingw32-g++ -std=c++11" PLAT=mingw -j$(nproc)
     cp core/lua.exe "$DIST_DIR/windows/cfxlua-vm.exe"
     cp core/lua54.dll "$DIST_DIR/windows/"
 else
