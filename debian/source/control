@@ -1,0 +1,9 @@
+Package: cfxlua-cli
+Version: 1.1.1
+Section: devel
+Priority: optional
+Architecture: amd64
+Maintainer: VIRUXE <flavioaspereira@gmail.com>
+Description: Standalone FiveM Lua verification toolchain
+ A standalone verification tool for FiveM scripts, powered by LuaGLM 5.4.
+ Supports MagicMocks, dynamic resource discovery, and execution safety.
